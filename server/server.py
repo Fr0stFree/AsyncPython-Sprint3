@@ -1,11 +1,13 @@
 import asyncio
 import logging.config
 
-from base.settings import LOGGER
-from base.utils import Request, execute_later
-from core.models import User, Message, MailBox
-from core.commands import CommandHandler
-from core.validators import validate_username, validate_message_delay
+from utils.settings import LOGGER
+from utils.functions import generate_random_username
+from .core.models.user import  UserManager
+from .core.models.message import ChatManager
+from .core.network import Request
+from .core.handlers import RequestHandler
+
 
 logging.config.dictConfig(LOGGER)
 logger = logging.getLogger(__name__)
@@ -16,11 +18,13 @@ class Server:
         self._host = host
         self._port = port
         self._server: asyncio.Server | None = None
-        self._users: set[User] = set()
-        self._mailbox: MailBox = MailBox()
-        self._scheduled_messages: dict[User, asyncio.Task] = {}
-    
+        self._incoming_queue: asyncio.Queue = asyncio.Queue()
+        self._outgoing_queue: asyncio.Queue = asyncio.Queue()
+        self._user_manager = UserManager()
+        self._chat_manager = ChatManager(gateway=self._outgoing_queue)
+
     def listen(self):
+        """Метод запускает сервер и ожидает подключения клиентов"""
         asyncio.run(self._start_server())
     
     async def _start_server(self):
@@ -28,190 +32,38 @@ class Server:
         self._server = await asyncio.start_server(self._handle_connection, self._host, self._port)
         async with self._server:
             logger.debug("Server is ready to accept connections on %s:%s", self._host, self._port)
+            asyncio.ensure_future(self._handle_incoming_data())
+            asyncio.ensure_future(self._handle_outgoing_data())
             await self._server.serve_forever()
-    
+
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        user = self._open_connection(reader, writer)
+        user = self._user_manager.create(reader, writer, username=generate_random_username())
         while True:
             try:
-                data = await user.receive()
-                request = Request.from_json(data)
-                request.user = user
-                logger.debug('Got request: %s', request)
-                request_handler = CommandHandler.get_handler(request.command)
-                await request_handler(self, request)
+                data = await self._user_manager.receive(user)
             except ConnectionError:
                 break
-        await self._close_connection(user)
-    
-    def _open_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> User:
-        user = User(reader, writer)
-        logger.info("New connection from %s", user)
-        self._users.add(user)
-        return user
-    
-    async def _close_connection(self, user: User):
-        logger.info("Connection with %s has been closed", user)
-        self._users.remove(user)
-        await user.close_connection()
+            await self._incoming_queue.put((user, data))
 
-    @CommandHandler.register('help')
-    async def help(self, request: Request):
-        """help - команда возвращает описание всех существующих команд взаимодействия с сервером."""
-        response = ('[SERVER] Possible commands:\n' +
-                    '\n'.join([handler.__doc__ for handler in CommandHandler.HANDLERS.values()]))
-        await request.user.send(response)
-        
-    @CommandHandler.register('exit')
-    async def exit(self, request: Request):
-        """exit - команда разрывает соединение между вами и сервером."""
-        response = f'[SERVER] Bye, {request.user.username}!'
-        await request.user.send(response)
-        raise ConnectionError
+        await self._user_manager.remove(user)
 
-    @CommandHandler.register('login')
-    async def login(self, request: Request) -> None:
-        """login {username} - команда изменяет ваш никнейм на сервере."""
-        new_username = request.value
-        is_valid, err_msg = validate_username(new_username)
-        if not is_valid:
-            response = f'[SERVER] {err_msg}'
-            await request.user.send(response)
-            return
+    async def _handle_incoming_data(self):
+        while True:
+            user, data = await self._incoming_queue.get()
+            request = Request.from_json(data)
+            request.user = user
+            logger.debug('Got request: %s ', request)
+            response = RequestHandler.handle(request)
+            await self._outgoing_queue.put((user, response))
+            self._incoming_queue.task_done()
 
-        if new_username in [user.username for user in self._users]:
-            response = f'[SERVER] User with name "{new_username}" already exists.'
-            await request.user.send(response)
-            return
-    
-        request.user.authorize(username=new_username)
-        response = f'[SERVER] Now your name is "{new_username}".'
-        await request.user.send(response)
-    
-    @CommandHandler.register('broadcast')
-    async def broadcast(self, request: Request) -> None:
-        """broadcast {message} - команда отправляет сообщение всем пользователям сервера."""
-        if not request.user.is_authorized:
-            response = f'[SERVER] You are not authorized. Please, use "login" command.'
-            await request.user.send(response)
-            return
-        
-        message = Message(text=request.value, sender=request.user)
-        self._mailbox.add(message)
-
-        coroutines = [user.send(response=str(message)) for user in self._users]
-        await asyncio.gather(*coroutines)
-
-    @CommandHandler.register('send')
-    async def send(self, request: Request) -> None:
-        """send {username} {message} - команда отправляет сообщение конкретному пользователю."""
-        if not request.user.is_authorized:
-            response = f'[SERVER] You are not authorized. Please, use "login" command.'
-            await request.user.send(response)
-            return
-        
-        username, message = request.value.split(maxsplit=1)
-        looking_user = next(filter(lambda user: user.username == username, self._users), None)
-
-        if looking_user is None:
-            response = f'[SERVER] User with name "{username}" not found.'
-            await request.user.send(response)
-            return
-        
-        message = Message(text=message, sender=request.user, receiver=looking_user)
-        self._mailbox.add(message)
-        await looking_user.send(response=str(message))
-        
-    @CommandHandler.register('schedule')
-    async def schedule(self, request: Request) -> None:
-        """
-        schedule {time} {message} - команда отправляет сообщение в общий чат через указанное
-        количество секунд. Разрешено не более одного запланированного сообщения.
-        """
-        if not request.user.is_authorized:
-            response = f'[SERVER] You are not authorized. Please, use "login" command.'
-            await request.user.send(response)
-            return
-        
-        delay, message = request.value.split(maxsplit=1)
-        is_valid, err_msg = validate_message_delay(delay)
-        if not is_valid:
-            response = f'[SERVER] {err_msg}'
-            await request.user.send(response)
-            return
-
-        request.value = message
-        scheduled_message = asyncio.create_task(execute_later(self.broadcast, int(delay), request))
-        self._scheduled_messages[request.user] = scheduled_message
-        response = f'[SERVER] Message "{message}" will be sent in {delay} seconds.'
-        await request.user.send(response)
-        
-    @CommandHandler.register('cancel')
-    async def cancel(self, request: Request) -> None:
-        """cancel - команда отменяет запланированное сообщение."""
-        if not request.user.is_authorized:
-            response = f'[SERVER] You are not authorized. Please, use "login" command.'
-            await request.user.send(response)
-            return
-        
-        task = self._scheduled_messages.get(request.user)
-        if task is None or task.done() or task.cancelled():
-            response = f'[SERVER] You have no scheduled messages.'
-        else:
-            task.cancel()
-            response = f'[SERVER] Scheduled message has been cancelled.'
-        await request.user.send(response)
-
-    @CommandHandler.register('list')
-    async def list(self, request: Request) -> None:
-        """list - команда возвращает список всех сообщений, которые были отправлены в общем чате."""
-        messages = self._mailbox.last()
-        if messages:
-            response = '\n'.join([str(message) for message in messages])
-        else:
-            response = '[SERVER] Message history is empty.'
-        await request.user.send(response)
-        
-    @CommandHandler.register('report')
-    async def report(self, request: Request) -> None:
-        """report {username} - пожаловаться на пользователя."""
-        if not request.user.is_authorized:
-            response = f'[SERVER] You are not authorized. Please, use "login" command.'
-            await request.user.send(response)
-            return
-        
-        username = request.value
-        looking_user = next(filter(lambda user: user.username == username, self._users), None)
-
-        if looking_user is None:
-            response = f'[SERVER] User with name "{username}" not found.'
-            await request.user.send(response)
-            return
-        
-        if request.user in looking_user.reported_by:
-            response = f'[SERVER] You already reported "{looking_user.username}".'
-            await request.user.send(response)
-            return
-        
-        looking_user.reported_by.add(request.user)
-        response_to_reported_user = f'[SERVER] User "{request.user.username}" reported you.'
-        response_to_reporter = f'[SERVER] You reported user "{looking_user.username}".'
-        await asyncio.gather(looking_user.send(response_to_reported_user),
-                             request.user.send(response_to_reporter))
-    
-    @CommandHandler.register('users')
-    async def users(self, request: Request) -> None:
-        """users - команда возвращает список всех пользователей на сервере."""
-        response = 'Active users: ' + ' '.join([f'[{user.username}]' for user in self._users])
-        await request.user.send(response)
-    
-    @CommandHandler.register('unknown')
-    async def unknown(self, request: Request) -> None:
-        """В случае, если команда не была распознана, сервер возвращает сообщение об ошибке."""
-        response = f'[SERVER] Error "{request.command}" is unknown command.'
-        await request.user.send(response)
-    
-
-if __name__ == "__main__":
-    server = Server()
-    server.listen()
+    async def _handle_outgoing_data(self):
+        while True:
+            destination, data = await self._outgoing_queue.get()
+            json_data = data.to_json()
+            if isinstance(destination, list):
+                tasks = [self._user_manager.send(user, json_data) for user in destination]
+                await asyncio.gather(*tasks)
+            else:
+                await self._user_manager.send(destination, json_data)
+            self._outgoing_queue.task_done()

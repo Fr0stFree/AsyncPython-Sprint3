@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Self
+from typing import Optional, Union
 
 
 class DataTransport:
@@ -37,13 +37,13 @@ class DataTransport:
 
 
 class Request:
-    def __init__(self, command: str, value: str | None = None, user: 'User' = None) -> None:
+    def __init__(self, command: str, data: dict | None = None, user: 'User' = None) -> None:
         self.command = command
-        self.value = value
+        self.data = data
         self.user = user
     
     @classmethod
-    def from_json(cls, data: str) -> Self:
+    def from_json(cls, data: str) -> 'Request':
         data = json.loads(data)
         return cls(**data)
     
@@ -51,12 +51,21 @@ class Request:
         return json.dumps(self.__dict__)
     
     def __repr__(self):
-        return f"Request(command={self.command}, value={self.value}, user={self.user})"
+        return f"Request(command={self.command}, value={self.data}, user={self.user})"
 
 
-async def execute_later(func: callable, delay: int, *args, **kwargs):
-    await asyncio.sleep(delay)
-    if asyncio.iscoroutinefunction(func):
-        await func(*args, **kwargs)
-    else:
-        func(*args, **kwargs)
+class Response:
+    def __init__(self, status: str, data: Union[str, dict] | None) -> None:
+        self.status = status
+        self.data = data
+
+    @classmethod
+    def from_json(cls, data: str) -> 'Response':
+        data = json.loads(data)
+        return cls(**data)
+
+    def to_json(self) -> str:
+        return json.dumps(self.__dict__)
+
+    def __repr__(self):
+        return f"Response(status={self.status}, data={self.data})"

@@ -1,11 +1,10 @@
 import asyncio
 import logging.config
-from typing import Self
 
 from aioconsole import ainput
 
-from base.settings import LOGGER
-from base.utils import DataTransport, Request
+from utils.settings import LOGGER
+from server.core.network import DataTransport, Request, Response
 
 
 logging.config.dictConfig(LOGGER)
@@ -19,7 +18,7 @@ class Client:
         self._data_queue = asyncio.Queue()
         self._transport: DataTransport | None = None
     
-    async def __aenter__(self) -> Self:
+    async def __aenter__(self) -> 'Client':
         logger.debug("Connecting to %s:%s", self._server_host, self._server_port)
         reader, writer = await asyncio.open_connection(self._server_host, self._server_port)
         self._transport = DataTransport(writer, reader)
@@ -36,7 +35,8 @@ class Client:
         while True:
             try:
                 data = await self._transport.receive()
-                print(data)
+                response = Response.from_json(data)
+                print(response.data)
             except ConnectionError:
                 break
     
@@ -48,8 +48,8 @@ class Client:
     
     def send_statement(self, statement: str) -> None:
         command, *value = statement.split()
-        value = ' '.join(value)
-        data = Request(command, value).to_json()
+        data = ' '.join(value)
+        data = Request(command, data={'value': data}).to_json()
         self._data_queue.put_nowait(data)
     
 
