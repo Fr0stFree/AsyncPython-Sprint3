@@ -2,8 +2,8 @@ import asyncio
 
 from .network import Request, Response
 from .validators import validate_username
-from .models.user import UserManager
-from .models.message import ChatManager, Message
+from .models.user import User
+from .models.message import Message
 from .exceptions import UsernameAlreadyTaken, UserDoesNotExist
 
 
@@ -38,52 +38,53 @@ def help(request: Request) -> Response:
     return Response('OK', data)
 
 
-@RequestHandler.register('exit')
-def exit(request: Request) -> Response:
-    """exit - команда разрывает соединение между вами и сервером."""
-    data = f'[SERVER] Bye, {request.user.username}!'
-    return Response('OK', data)
-
-
-@RequestHandler.register('rename')
-def rename(request: Request) -> Response:
-    """rename {username} - команда изменяет ваш никнейм на сервере."""
-    new_username = request.data.get('value')
-    is_valid, err_msg = validate_username(new_username)
-    if not is_valid:
-        return Response('ERROR', data=err_msg)
-
-    try:
-        UserManager().rename(request.user, new_username)
-    except UsernameAlreadyTaken:
-        return Response('ERROR', data=f'User with name "{new_username}" already exists.')
-    return Response('OK', data=f'Your username changed to "{new_username}".')
-
-@RequestHandler.register('users')
-def users(request: Request) -> Response:
-    """users - команда возвращает список всех пользователей на сервере."""
-    return Response('OK', data='Active users: ' + ' '.join([f'[{user.username}]' for user in UserManager().all()]))
-
-
-@RequestHandler.register('send')
-def send(request: Request) -> Response:
-    """
-    send {message} - команда отправляет сообщение всем пользователям.
-    options: -u --username {username:str} - команда отправляет сообщение конкретному пользователю.
-             -t --time {time:int} - команда отправляет сообщение через заданное количество секунд.
-    """
-    to_username = request.data.get('username')
-    if not to_username:
-        destination = UserManager().all()
-    else:
-        try:
-            destination = UserManager().get(username=to_username)
-        except UserDoesNotExist:
-            return Response('ERROR', data=f'User with name "{to_username}" does not exist.')
-
-    message = Message(text=request.data.get('value'), sender=request.user, destination=destination)
-    asyncio.create_task(ChatManager.get_current().send(message))
-    return Response('OK', data=f'Your message was sent to all users.')
+# @RequestHandler.register('exit')
+# def exit(request: Request) -> Response:
+#     """exit - команда разрывает соединение между вами и сервером."""
+#     data = f'[SERVER] Bye, {request.user.username}!'
+#     return Response('OK', data)
+#
+#
+# @RequestHandler.register('rename')
+# def rename(request: Request) -> Response:
+#     """rename {username} - команда изменяет ваш никнейм на сервере."""
+#     new_username = request.data.get('value')
+#     is_valid, err_msg = validate_username(new_username)
+#     if not is_valid:
+#         return Response('ERROR', data=err_msg)
+#
+#     try:
+#         UserManager().rename(request.user, new_username)
+#     except UsernameAlreadyTaken:
+#         return Response('ERROR', data=f'User with name "{new_username}" already exists.')
+#     return Response('OK', data=f'Your username changed to "{new_username}".')
+#
+# @RequestHandler.register('users')
+# def users(request: Request) -> Response:
+#     """users - команда возвращает список всех пользователей на сервере."""
+#     return Response('OK', data='Active users: ' + ' '.join([f'[{user.username}]' for user in UserManager().all()]))
+#
+#
+# @RequestHandler.register('send')
+# def send(request: Request) -> Response:
+#     """
+#     send {message} - команда отправляет сообщение всем пользователям.
+#     options: -u --username {username:str} - команда отправляет сообщение конкретному пользователю.
+#              -t --time {time:int} - команда отправляет сообщение через заданное количество секунд.
+#     """
+#     to_username = request.data.get('username')
+#     if not to_username:
+#         destination = UserManager().all()
+#     else:
+#         try:
+#             destination = UserManager().get(username=to_username)
+#         except UserDoesNotExist:
+#             return Response('ERROR', data=f'User with name "{to_username}" does not exist.')
+#     message = Message.objects.create(text=request.data.get('value'),
+#                                      sender=request.user,
+#                                      destination=destination)
+#     asyncio.create_task(ChatManager.get_current().send(message))
+#     return Response('OK', data=f'Your message was sent to all users.')
 
 
 # @RequestHandler.register('send')

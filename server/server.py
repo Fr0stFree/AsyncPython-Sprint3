@@ -3,8 +3,8 @@ import logging.config
 
 from utils.settings import LOGGER
 from utils.functions import generate_random_username
-from .core.models.user import  UserManager
-from .core.models.message import ChatManager
+from .core.models.user import User
+from .core.models.message import Message
 from .core.network import Request
 from .core.handlers import RequestHandler
 
@@ -20,8 +20,8 @@ class Server:
         self._server: asyncio.Server | None = None
         self._incoming_queue: asyncio.Queue = asyncio.Queue()
         self._outgoing_queue: asyncio.Queue = asyncio.Queue()
-        self._user_manager = UserManager()
-        self._chat_manager = ChatManager(gateway=self._outgoing_queue)
+        # self._user_manager = UserManager()
+        # self._chat_manager = ChatManager(gateway=self._outgoing_queue)
 
     def listen(self):
         """Метод запускает сервер и ожидает подключения клиентов"""
@@ -37,15 +37,16 @@ class Server:
             await self._server.serve_forever()
 
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        user = self._user_manager.create(reader, writer, username=generate_random_username())
+        # user = self._user_manager.create(reader, writer, username=generate_random_username())
+        user = User.objects.create(reader, writer, username=generate_random_username())
         while True:
             try:
-                data = await self._user_manager.receive(user)
+                data = await user.receive()
             except ConnectionError:
                 break
             await self._incoming_queue.put((user, data))
 
-        await self._user_manager.remove(user)
+        await user.remove()
 
     async def _handle_incoming_data(self):
         while True:
@@ -62,8 +63,8 @@ class Server:
             destination, data = await self._outgoing_queue.get()
             json_data = data.to_json()
             if isinstance(destination, list):
-                tasks = [self._user_manager.send(user, json_data) for user in destination]
+                tasks = [user.send(json_data) for user in destination]
                 await asyncio.gather(*tasks)
             else:
-                await self._user_manager.send(destination, json_data)
+                await destination.send(json_data)
             self._outgoing_queue.task_done()
