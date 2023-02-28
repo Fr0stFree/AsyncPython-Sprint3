@@ -6,13 +6,17 @@ from utils.classes import Model
 from server.core.network import DataTransport, Request, Update
 
 
-MESSAGE_TTL: Final[int] = 10  # seconds
+MESSAGE_TTL: Final[int] = 60 * 60 # seconds
+BAN_TIME: Final[int] = 60 * 10  # seconds
+REPORTS_TO_BAN: Final[int] = 3
+
 
 class Gateway(Model):
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
     username: str
     reported_by: set['Gateway'] = set()
+    is_banned: bool = False
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -20,6 +24,13 @@ class Gateway(Model):
 
     def __str__(self):
         return f'client({self.username} transport={self.transport})'
+    
+    def ban(self):
+        self.is_banned = True
+    
+    def unban(self):
+        self.reported_by.clear()
+        self.is_banned = False
 
     @classmethod
     async def close(cls, self):
@@ -46,7 +57,6 @@ class Gateway(Model):
         pass
 
 
-
 class Message(Model):
     text: str
     sender: Gateway
@@ -60,7 +70,7 @@ class Message(Model):
         return self.task._state
 
     def __str__(self):
-        return f'Message({self.sender.username} >> {self.target} text={self.text})'
+        return f'[MESSAGE] {self.sender.username} >>> {self.text}'
 
     def to_dict(self) -> dict:
         return {'text': self.text,
@@ -72,7 +82,9 @@ class Message(Model):
         if delay is None:
             self.task = asyncio.create_task(Gateway.send_update(update))
         else:
-            self.task = asyncio.create_task(execute_later(Gateway.send_update, update=update, delay=delay))
+            self.task = asyncio.create_task(execute_later(func=Gateway.send_update,
+                                                          update=update,
+                                                          delay=delay))
         self.task.add_done_callback(self._destroy_self)
 
     def cancel(self) -> None:

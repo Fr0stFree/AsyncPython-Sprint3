@@ -2,10 +2,10 @@ import asyncio
 import logging.config
 
 from utils.settings import LOGGER
-from .core.models import Gateway
+from utils.functions import generate_random_name
+from .core.models import Gateway, Message
 from .core.network import Request, Update
 from .core.handlers import Handler
-
 
 
 logging.config.dictConfig(LOGGER)
@@ -17,7 +17,6 @@ class Server:
         self._host = host
         self._port = port
         self._server: asyncio.Server | None = None
-
 
     def listen(self):
         """Метод запускает сервер и ожидает подключения клиентов"""
@@ -31,7 +30,8 @@ class Server:
             await self._server.serve_forever()
 
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        client = Gateway.objects.create(reader=reader, writer=writer, username='test')
+        client = Gateway.objects.create(reader=reader, writer=writer,
+                                        username=generate_random_name())
         logger.debug("New connection from %s", client)
         while True:
             try:

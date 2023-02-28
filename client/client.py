@@ -3,8 +3,9 @@ import logging.config
 
 from aioconsole import ainput
 
-from utils.settings import LOGGER
 from server.core.network import DataTransport, Request, Update
+from utils.settings import LOGGER
+from utils.functions import print_update
 
 
 logging.config.dictConfig(LOGGER)
@@ -12,19 +13,16 @@ logger = logging.getLogger(__name__)
 
 
 class Client:
-    def __init__(self, server_host="127.0.0.1", server_port=8000):
+    def __init__(self, server_host: str = "127.0.0.1", server_port: int = 8000):
         self._server_host = server_host
         self._server_port = server_port
-        self._data_queue = asyncio.Queue()
         self._transport: DataTransport | None = None
     
     async def __aenter__(self) -> 'Client':
-        logger.debug("Connecting to %s:%s", self._server_host, self._server_port)
         reader, writer = await asyncio.open_connection(self._server_host, self._server_port)
         self._transport = DataTransport(writer, reader)
         logger.debug("Connected to %s:%s", self._server_host, self._server_port)
         asyncio.ensure_future(self._receive_data())
-        asyncio.ensure_future(self._transfer_data())
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -35,26 +33,22 @@ class Client:
         while True:
             try:
                 data = await self._transport.receive()
-                response = Update.from_json(data)
-                print(response.data)
+                update = Update.from_json(data)
+                print_update(update)
             except ConnectionError:
                 break
     
-    async def _transfer_data(self) -> None:
-        while True:
-            data = await self._data_queue.get()
-            await self._transport.transfer(data)
-            self._data_queue.task_done()
-    
-    def send_statement(self, statement: str) -> None:
+    async def execute(self, statement: str) -> None:
         command, *value = statement.split()
-        data = ' '.join(value)
-        data = Request(command, data={'value': data}).to_json()
-        self._data_queue.put_nowait(data)
-    
+        request = Request(command, data=' '.join(value)).to_json()
+        await self._transport.transfer(request)
+
 
 async def init_client():
     async with Client() as client:
         while True:
-            statement = await ainput("")
-            client.send_statement(statement)
+            statement = await ainput()
+            if statement == 'exit':
+                await client.execute(statement)
+                break
+            asyncio.create_task(client.execute(statement))

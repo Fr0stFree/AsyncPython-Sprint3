@@ -3,10 +3,10 @@ import asyncio
 import getopt
 
 from utils.functions import parse_opts, execute_later
-from .models import Gateway, Message
+from .models import Gateway, Message, BAN_TIME, REPORTS_TO_BAN
 from .network import Request, Update
 from .validators import validate_username, validate_message_delay
-from utils.exceptions import ValidationError, ObjectDoesNotExist, ObjectAlreadyExist
+from utils.exceptions import ValidationError, ObjectDoesNotExist
 
 
 class Handler:
@@ -22,7 +22,8 @@ class Handler:
     @classmethod
     def handle(cls, request: Request) -> Update:
         if request.command not in cls.objects:
-            return Update('ERROR', data=f'Unknown command "{request.command}"', target=request.client)
+            return Update('ERROR', data=f'Unknown command "{request.command}"',
+                          target=request.client)
 
         handler = cls.objects[request.command]
         return handler(request)
@@ -35,32 +36,34 @@ class Handler:
 @Handler.register('help')
 def help(request: Request) -> Update:
     """help - команда возвращает описание всех существующих команд взаимодействия с сервером."""
-    message = {'message': [handler.__doc__ for handler in Handler.all()]}
+    message = '\n'.join([handler.__doc__ for handler in Handler.all()])
     return Update('OK', data=message, target=request.client)
 
 
 @Handler.register('exit')
-def exit(request: Request) -> Update:
+def exit(request: Request) -> None:
     """exit - команда разрывает соединение между вами и сервером."""
-    return Update('OK', data=f'Bye, {request.client.username}!', target=request.client)
+    raise ConnectionError
 
 
 @Handler.register('rename')
 def rename(request: Request) -> Update:
     """rename {username} - команда изменяет ваш никнейм на сервере."""
-    new_username = request.data['value']
+    new_username = request.data
     try:
         validate_username(new_username)
     except ValidationError as err:
         error_message = str(err)
-        return Update('ERROR', data=dict(error_message), target=request.client)
+        return Update('ERROR', data=error_message, target=request.client)
     try:
         Gateway.objects.get(username=new_username)
     except ObjectDoesNotExist:
         request.client.update(username=new_username)
-        return Update('OK', data=f'Your username changed to "{new_username}".', target=request.client)
+        return Update('OK', data=f'Your username changed to "{new_username}".',
+                      target=request.client)
 
-    return Update('ERROR', data=f'User with name "{new_username}" already exists.', target=request.client)
+    return Update('ERROR', data=f'User with name "{new_username}" already exists.',
+                  target=request.client)
 
 
 @Handler.register('users')
@@ -77,11 +80,14 @@ def send(request: Request) -> Update:
     options: -u --username {username:str} - команда отправляет сообщение конкретному пользователю.
              -t --time {time:int} - команда отправляет сообщение через заданное количество секунд.
     """
-    message = request.data['value']
+    message = request.data
     receiver_username = None
     delay = None
     target = Gateway.BROADCAST
-
+    
+    if request.client.is_banned:
+        return Update('ERROR', data=f'You are still banned!', target=request.client)
+    
     try:
         receiver_username, delay, message = parse_opts(message)
     except getopt.GetoptError as err:
@@ -91,8 +97,8 @@ def send(request: Request) -> Update:
         try:
             target = Gateway.objects.get(username=receiver_username)
         except ObjectDoesNotExist:
-            return Update('ERROR', data=f'User with name "{receiver_username}" does not exist.', target=request.client)
-
+            return Update('ERROR', data=f'User with name "{receiver_username}" does not exist.',
+                          target=request.client)
     if delay:
         try:
             validate_message_delay(delay)
@@ -102,7 +108,6 @@ def send(request: Request) -> Update:
 
     Message.objects.create(text=message, sender=request.client, target=target).send(delay=delay)
     return Update('OK', data=f'Message has been created.', target=request.client)
-
 
 
 @Handler.register('cancel')
@@ -119,9 +124,10 @@ def cancel(request: Request) -> Update:
 @Handler.register('history')
 def history(request: Request) -> Update:
     """history - команда возвращает список всех сообщений, которые были отправлены в общем чате."""
-    messages = Message.objects.filter(target=any([Gateway.BROADCAST, request.client]), status='FINISHED')[:20]
+    messages = Message.objects.filter(target=any([Gateway.BROADCAST, request.client]),
+                                      status='FINISHED')[:20]
     if messages:
-        message = {'message': [msg.to_dict() for msg in messages]}
+        message = '\n'.join([str(msg) for msg in messages])
     else:
         message = 'Message history is empty.'
     return Update('OK', data=message, target=request.client)
@@ -129,13 +135,29 @@ def history(request: Request) -> Update:
 
 @Handler.register('report')
 def report(request: Request) -> Update:
-    """report {username} - пожаловаться на пользователя."""
-    username = request.data['value']
+    """report {username:str} - пожаловаться на пользователя."""
+    username = request.data
     try:
         intruder = Gateway.objects.get(username=username)
     except ObjectDoesNotExist:
-        return Update('ERROR', data=f'User with name "{username}" does not exist.', target=request.client)
+        return Update('ERROR', data=f'User with name "{username}" does not exist.',
+                      target=request.client)
     if request.client in intruder.reported_by:
-        return Update('ERROR', data=f'You have already reported user "{username}".', target=request.client)
-    intruder.reported_by.add(request.client)
+        return Update('ERROR', data=f'You have already reported user "{username}".',
+                      target=request.client)
+    reporters = intruder.reported_by
+    reporters.add(request.client)
+    if len(reporters) >= REPORTS_TO_BAN:
+        intruder.ban()
+        ban_notification = Update('ERROR', data=f'You have been banned for {BAN_TIME} seconds.',
+                                  target=intruder)
+        asyncio.create_task(Gateway.send_update(ban_notification))
+        
+        unban_task = asyncio.create_task(execute_later(func=intruder.unban, delay=BAN_TIME))
+        unban_notification = Update('OK', data=f'You able to send messages again.', target=intruder)
+        unban_task.add_done_callback(
+            lambda task: asyncio.create_task(Gateway.send_update(unban_notification))
+        )
+    else:
+        intruder.update(reported_by=reporters)
     return Update('OK', data=f'User "{username}" has been reported.', target=request.client)
