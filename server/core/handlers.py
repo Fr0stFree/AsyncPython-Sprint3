@@ -2,7 +2,7 @@ import asyncio
 
 import getopt
 
-from utils.functions import parse_opts
+from utils.functions import parse_opts, execute_later
 from .models import Gateway, Message
 from .network import Request, Update
 from .validators import validate_username, validate_message_delay
@@ -35,7 +35,7 @@ class Handler:
 @Handler.register('help')
 def help(request: Request) -> Update:
     """help - команда возвращает описание всех существующих команд взаимодействия с сервером."""
-    message = '\n'.join([handler.__doc__ for handler in Handler.all()])
+    message = {'message': [handler.__doc__ for handler in Handler.all()]}
     return Update('OK', data=message, target=request.client)
 
 
@@ -48,7 +48,7 @@ def exit(request: Request) -> Update:
 @Handler.register('rename')
 def rename(request: Request) -> Update:
     """rename {username} - команда изменяет ваш никнейм на сервере."""
-    new_username = request.data.get('value')
+    new_username = request.data['value']
     try:
         validate_username(new_username)
     except ValidationError as err:
@@ -100,34 +100,26 @@ def send(request: Request) -> Update:
         except ValidationError as err:
             return Update('ERROR', data=str(err), target=request.client)
 
-    message = Message.objects.create(text=message, sender=request.client, target=target)
-    task = Message.send(message, delay=delay)
-
+    Message.objects.create(text=message, sender=request.client, target=target).send(delay=delay)
     return Update('OK', data=f'Message has been created.', target=request.client)
 
 
 
-# @RequestHandler.register('cancel')
-# def cancel(request: Request) -> None:
-#     """cancel - команда отменяет запланированное сообщение."""
-#     if not request.user.is_authorized:
-#         response = f'[SERVER] You are not authorized. Please, use "login" command.'
-#         await request.user.send(response)
-#         return
-#
-#     task = self._scheduled_messages.get(request.user)
-#     if task is None or task.done() or task.cancelled():
-#         response = f'[SERVER] You have no scheduled messages.'
-#     else:
-#         task.cancel()
-#         response = f'[SERVER] Scheduled message has been cancelled.'
-#     await request.user.send(response)
+@Handler.register('cancel')
+def cancel(request: Request) -> Update:
+    """cancel - команда отменяет последнее запланированное сообщение."""
+    try:
+        message = Message.objects.get(sender=request.client, status='PENDING')
+    except ObjectDoesNotExist:
+        return Update('ERROR', data='You have no scheduled messages.', target=request.client)
+    message.cancel()
+    return Update('OK', data=f'Message "{message.text}" has been canceled.', target=request.client)
 
 
 @Handler.register('history')
 def history(request: Request) -> Update:
     """history - команда возвращает список всех сообщений, которые были отправлены в общем чате."""
-    messages = Message.objects.all()[::-1]
+    messages = Message.objects.filter(target=any([Gateway.BROADCAST, request.client]), status='FINISHED')[:20]
     if messages:
         message = {'message': [msg.to_dict() for msg in messages]}
     else:
@@ -135,30 +127,15 @@ def history(request: Request) -> Update:
     return Update('OK', data=message, target=request.client)
 
 
-# @RequestHandler.register('report')
-# def report(request: Request) -> None:
-#     """report {username} - пожаловаться на пользователя."""
-#     if not request.user.is_authorized:
-#         response = f'[SERVER] You are not authorized. Please, use "login" command.'
-#         await request.user.send(response)
-#         return
-#
-#     username = request.value
-#     looking_user = next(filter(lambda user: user.username == username, self._users), None)
-#
-#     if looking_user is None:
-#         response = f'[SERVER] User with name "{username}" not found.'
-#         await request.user.send(response)
-#         return
-#
-#     if request.user in looking_user.reported_by:
-#         response = f'[SERVER] You already reported "{looking_user.username}".'
-#         await request.user.send(response)
-#         return
-#
-#     looking_user.reported_by.add(request.user)
-#     response_to_reported_user = f'[SERVER] User "{request.user.username}" reported you.'
-#     response_to_reporter = f'[SERVER] You reported user "{looking_user.username}".'
-#     await asyncio.gather(looking_user.send(response_to_reported_user),
-#                          request.user.send(response_to_reporter))
-#
+@Handler.register('report')
+def report(request: Request) -> Update:
+    """report {username} - пожаловаться на пользователя."""
+    username = request.data['value']
+    try:
+        intruder = Gateway.objects.get(username=username)
+    except ObjectDoesNotExist:
+        return Update('ERROR', data=f'User with name "{username}" does not exist.', target=request.client)
+    if request.client in intruder.reported_by:
+        return Update('ERROR', data=f'You have already reported user "{username}".', target=request.client)
+    intruder.reported_by.add(request.client)
+    return Update('OK', data=f'User "{username}" has been reported.', target=request.client)

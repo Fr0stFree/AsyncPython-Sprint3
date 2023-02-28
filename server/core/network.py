@@ -37,7 +37,7 @@ class DataTransport:
 
 
 class Request:
-    def __init__(self, command: str, data: dict | None = None, client: 'Client' = None) -> None:
+    def __init__(self, command: str, data: dict | None = None, client=None) -> None:
         self.command = command
         self.data = data
         self.client = client
