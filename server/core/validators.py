@@ -1,18 +1,19 @@
-def validate_username(username: str) -> tuple[bool, str]:
+from utils.exceptions import ValidationError
+
+def validate_username(username: str):
     """Функция проверяет никнейм пользователя на корректность."""
     if len(username) > 15:
-        return False, 'Имя пользователя не должно превышать 25 символов'
+        raise ValidationError('Имя пользователя должно быть не длиннее 15 символов')
     if len(username) < 3:
-        return False, 'Имя пользователя должно быть не короче 3 символов'
+        raise ValidationError('Имя пользователя должно быть не короче 3 символов')
     if ' ' in username:
-        return False, 'Имя пользователя не должно содержать пробелы'
-    return True, 'OK'
+        raise ValidationError('Имя пользователя не должно содержать пробелы')
 
 
-def validate_message_delay(delay: str) -> tuple[bool, str]:
+def validate_message_delay(delay: str):
     """Функция проверяет задержку отправки сообщения на корректность."""
     if not delay.isdigit():
-        return False, 'Задержка должна быть целым числом'
+        raise ValidationError('Задержка должна быть целым числом')
     if int(delay) < 0:
-        return False, 'Задержка не может быть отрицательной'
-    return True, 'OK'
+        raise ValidationError('Задержка должна быть положительным числом')
+

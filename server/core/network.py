@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Optional, Union
+from typing import Union
 
 
 class DataTransport:
@@ -37,10 +37,10 @@ class DataTransport:
 
 
 class Request:
-    def __init__(self, command: str, data: dict | None = None, user: 'User' = None) -> None:
+    def __init__(self, command: str, data: dict | None = None, client: 'Client' = None) -> None:
         self.command = command
         self.data = data
-        self.user = user
+        self.client = client
     
     @classmethod
     def from_json(cls, data: str) -> 'Request':
@@ -51,21 +51,27 @@ class Request:
         return json.dumps(self.__dict__)
     
     def __repr__(self):
-        return f"Request(command={self.command}, value={self.data}, user={self.user})"
+        return f"Request(command={self.command}, value={self.data}, client={self.client})"
 
 
-class Response:
-    def __init__(self, status: str, data: Union[str, dict] | None) -> None:
+class Update:
+    def __init__(self, status: str, data: Union[dict, str], target) -> None:
         self.status = status
         self.data = data
+        self.target = target
 
     @classmethod
-    def from_json(cls, data: str) -> 'Response':
+    def from_json(cls, data: str) -> 'Update':
         data = json.loads(data)
         return cls(**data)
 
     def to_json(self) -> str:
-        return json.dumps(self.__dict__)
+        if isinstance(self.data, str):
+            self.data = dict(message=self.data)
+
+        return json.dumps({'status': self.status,
+                           'data': self.data if not isinstance(self.data, str) else dict(message=self.data),
+                           'target': str(self.target)})
 
     def __repr__(self):
-        return f"Response(status={self.status}, data={self.data})"
+        return f"Update(status={self.status}, data={self.data}, target={self.target})"

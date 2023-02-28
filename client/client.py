@@ -4,7 +4,7 @@ import logging.config
 from aioconsole import ainput
 
 from utils.settings import LOGGER
-from server.core.network import DataTransport, Request, Response
+from server.core.network import DataTransport, Request, Update
 
 
 logging.config.dictConfig(LOGGER)
@@ -35,7 +35,7 @@ class Client:
         while True:
             try:
                 data = await self._transport.receive()
-                response = Response.from_json(data)
+                response = Update.from_json(data)
                 print(response.data)
             except ConnectionError:
                 break

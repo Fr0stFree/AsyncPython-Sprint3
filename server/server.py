@@ -2,11 +2,10 @@ import asyncio
 import logging.config
 
 from utils.settings import LOGGER
-from utils.functions import generate_random_username
-from .core.models.user import User
-from .core.models.message import Message
-from .core.network import Request
-from .core.handlers import RequestHandler
+from .core.models import Gateway
+from .core.network import Request, Update
+from .core.handlers import Handler
+
 
 
 logging.config.dictConfig(LOGGER)
@@ -18,10 +17,7 @@ class Server:
         self._host = host
         self._port = port
         self._server: asyncio.Server | None = None
-        self._incoming_queue: asyncio.Queue = asyncio.Queue()
-        self._outgoing_queue: asyncio.Queue = asyncio.Queue()
-        # self._user_manager = UserManager()
-        # self._chat_manager = ChatManager(gateway=self._outgoing_queue)
+
 
     def listen(self):
         """Метод запускает сервер и ожидает подключения клиентов"""
@@ -32,39 +28,18 @@ class Server:
         self._server = await asyncio.start_server(self._handle_connection, self._host, self._port)
         async with self._server:
             logger.debug("Server is ready to accept connections on %s:%s", self._host, self._port)
-            asyncio.ensure_future(self._handle_incoming_data())
-            asyncio.ensure_future(self._handle_outgoing_data())
             await self._server.serve_forever()
 
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        # user = self._user_manager.create(reader, writer, username=generate_random_username())
-        user = User.objects.create(reader, writer, username=generate_random_username())
+        client = Gateway.objects.create(reader=reader, writer=writer, username='test')
+        logger.debug("New connection from %s", client)
         while True:
             try:
-                data = await user.receive()
+                request: Request = await Gateway.receive(client)
+                update: Update = Handler.handle(request)
+                await Gateway.send_update(update)
             except ConnectionError:
                 break
-            await self._incoming_queue.put((user, data))
 
-        await user.remove()
-
-    async def _handle_incoming_data(self):
-        while True:
-            user, data = await self._incoming_queue.get()
-            request = Request.from_json(data)
-            request.user = user
-            logger.debug('Got request: %s ', request)
-            response = RequestHandler.handle(request)
-            await self._outgoing_queue.put((user, response))
-            self._incoming_queue.task_done()
-
-    async def _handle_outgoing_data(self):
-        while True:
-            destination, data = await self._outgoing_queue.get()
-            json_data = data.to_json()
-            if isinstance(destination, list):
-                tasks = [user.send(json_data) for user in destination]
-                await asyncio.gather(*tasks)
-            else:
-                await destination.send(json_data)
-            self._outgoing_queue.task_done()
+        logger.debug("Connection from %s is closed", client)
+        await Gateway.close(client)

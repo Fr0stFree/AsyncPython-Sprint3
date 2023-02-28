@@ -1,144 +1,114 @@
 import asyncio
 
-from .network import Request, Response
-from .validators import validate_username
-from .models.user import User
-from .models.message import Message
-from .exceptions import UsernameAlreadyTaken, UserDoesNotExist
+import getopt
+
+from utils.functions import parse_opts
+from .models import Gateway, Message
+from .network import Request, Update
+from .validators import validate_username, validate_message_delay
+from utils.exceptions import ValidationError, ObjectDoesNotExist, ObjectAlreadyExist
 
 
-class RequestHandler:
-    HANDLERS = {}
+class Handler:
+    objects = {}
 
     @classmethod
     def register(cls, command: str):
         def decorator(func):
-            cls.HANDLERS[command] = func
+            cls.objects[command] = func
             return func
         return decorator
 
     @classmethod
-    def handle(cls, request: Request) -> Response:
-        if request.command not in cls.HANDLERS:
-            return Response('ERROR', data=f'Unknown command "{request.command}"')
+    def handle(cls, request: Request) -> Update:
+        if request.command not in cls.objects:
+            return Update('ERROR', data=f'Unknown command "{request.command}"', target=request.client)
 
-        handler = cls.HANDLERS[request.command]
-        response = handler(request)
-        return response
+        handler = cls.objects[request.command]
+        return handler(request)
 
     @classmethod
-    def all_handlers(cls):
-        return cls.HANDLERS.values()
+    def all(cls) -> list[callable]:
+        return list(cls.objects.values())
 
 
-@RequestHandler.register('help')
-def help(request: Request) -> Response:
+@Handler.register('help')
+def help(request: Request) -> Update:
     """help - команда возвращает описание всех существующих команд взаимодействия с сервером."""
-    data = '\n'.join([handler.__doc__ for handler in RequestHandler.all_handlers()])
-    return Response('OK', data)
+    message = '\n'.join([handler.__doc__ for handler in Handler.all()])
+    return Update('OK', data=message, target=request.client)
 
 
-# @RequestHandler.register('exit')
-# def exit(request: Request) -> Response:
-#     """exit - команда разрывает соединение между вами и сервером."""
-#     data = f'[SERVER] Bye, {request.user.username}!'
-#     return Response('OK', data)
-#
-#
-# @RequestHandler.register('rename')
-# def rename(request: Request) -> Response:
-#     """rename {username} - команда изменяет ваш никнейм на сервере."""
-#     new_username = request.data.get('value')
-#     is_valid, err_msg = validate_username(new_username)
-#     if not is_valid:
-#         return Response('ERROR', data=err_msg)
-#
-#     try:
-#         UserManager().rename(request.user, new_username)
-#     except UsernameAlreadyTaken:
-#         return Response('ERROR', data=f'User with name "{new_username}" already exists.')
-#     return Response('OK', data=f'Your username changed to "{new_username}".')
-#
-# @RequestHandler.register('users')
-# def users(request: Request) -> Response:
-#     """users - команда возвращает список всех пользователей на сервере."""
-#     return Response('OK', data='Active users: ' + ' '.join([f'[{user.username}]' for user in UserManager().all()]))
-#
-#
-# @RequestHandler.register('send')
-# def send(request: Request) -> Response:
-#     """
-#     send {message} - команда отправляет сообщение всем пользователям.
-#     options: -u --username {username:str} - команда отправляет сообщение конкретному пользователю.
-#              -t --time {time:int} - команда отправляет сообщение через заданное количество секунд.
-#     """
-#     to_username = request.data.get('username')
-#     if not to_username:
-#         destination = UserManager().all()
-#     else:
-#         try:
-#             destination = UserManager().get(username=to_username)
-#         except UserDoesNotExist:
-#             return Response('ERROR', data=f'User with name "{to_username}" does not exist.')
-#     message = Message.objects.create(text=request.data.get('value'),
-#                                      sender=request.user,
-#                                      destination=destination)
-#     asyncio.create_task(ChatManager.get_current().send(message))
-#     return Response('OK', data=f'Your message was sent to all users.')
+@Handler.register('exit')
+def exit(request: Request) -> Update:
+    """exit - команда разрывает соединение между вами и сервером."""
+    return Update('OK', data=f'Bye, {request.client.username}!', target=request.client)
 
 
-# @RequestHandler.register('send')
-# async def send(request: Request) -> None:
-#     """send {username} {message} - команда отправляет сообщение конкретному пользователю."""
-#     if not request.user.is_authorized:
-#         response = f'[SERVER] You are not authorized. Please, use "login" command.'
-#         await request.user.send(response)
-#         return
-#
-#     username, message = request.value.split(maxsplit=1)
-#     looking_user = next(filter(lambda user: user.username == username, self._users), None)
-#
-#     if looking_user is None:
-#         response = f'[SERVER] User with name "{username}" not found.'
-#         await request.user.send(response)
-#         return
-#
-#     message = Message(text=message, sender=request.user, receiver=looking_user)
-#     self._mailbox.add(message)
-#     await looking_user.send(response=str(message))
+@Handler.register('rename')
+def rename(request: Request) -> Update:
+    """rename {username} - команда изменяет ваш никнейм на сервере."""
+    new_username = request.data.get('value')
+    try:
+        validate_username(new_username)
+    except ValidationError as err:
+        error_message = str(err)
+        return Update('ERROR', data=dict(error_message), target=request.client)
+    try:
+        Gateway.objects.get(username=new_username)
+    except ObjectDoesNotExist:
+        request.client.update(username=new_username)
+        return Update('OK', data=f'Your username changed to "{new_username}".', target=request.client)
+
+    return Update('ERROR', data=f'User with name "{new_username}" already exists.', target=request.client)
 
 
-#
-#
-#
-#
-# @RequestHandler.register('schedule')
-# async def schedule(request: Request) -> None:
-#     """
-#     schedule {time} {message} - команда отправляет сообщение в общий чат через указанное
-#     количество секунд. Разрешено не более одного запланированного сообщения.
-#     """
-#     if not request.user.is_authorized:
-#         response = f'[SERVER] You are not authorized. Please, use "login" command.'
-#         await request.user.send(response)
-#         return
-#
-#     delay, message = request.value.split(maxsplit=1)
-#     is_valid, err_msg = validate_message_delay(delay)
-#     if not is_valid:
-#         response = f'[SERVER] {err_msg}'
-#         await request.user.send(response)
-#         return
-#
-#     request.value = message
-#     scheduled_message = asyncio.create_task(execute_later(self.broadcast, int(delay), request))
-#     self._scheduled_messages[request.user] = scheduled_message
-#     response = f'[SERVER] Message "{message}" will be sent in {delay} seconds.'
-#     await request.user.send(response)
-#
-#
+@Handler.register('users')
+def users(request: Request) -> Update:
+    """users - команда возвращает список всех пользователей на сервере."""
+    message = 'Active users: ' + ' '.join([f'[{user.username}]' for user in Gateway.objects.all()])
+    return Update('OK', data=message, target=request.client)
+
+
+@Handler.register('send')
+def send(request: Request) -> Update:
+    """
+    send {message} - команда отправляет сообщение всем пользователям.
+    options: -u --username {username:str} - команда отправляет сообщение конкретному пользователю.
+             -t --time {time:int} - команда отправляет сообщение через заданное количество секунд.
+    """
+    message = request.data['value']
+    receiver_username = None
+    delay = None
+    target = Gateway.BROADCAST
+
+    try:
+        receiver_username, delay, message = parse_opts(message)
+    except getopt.GetoptError as err:
+        return Update('ERROR', data=f'Invalid options: {err}', target=request.client)
+
+    if receiver_username:
+        try:
+            target = Gateway.objects.get(username=receiver_username)
+        except ObjectDoesNotExist:
+            return Update('ERROR', data=f'User with name "{receiver_username}" does not exist.', target=request.client)
+
+    if delay:
+        try:
+            validate_message_delay(delay)
+            delay = int(delay)
+        except ValidationError as err:
+            return Update('ERROR', data=str(err), target=request.client)
+
+    message = Message.objects.create(text=message, sender=request.client, target=target)
+    task = Message.send(message, delay=delay)
+
+    return Update('OK', data=f'Message has been created.', target=request.client)
+
+
+
 # @RequestHandler.register('cancel')
-# async def cancel(request: Request) -> None:
+# def cancel(request: Request) -> None:
 #     """cancel - команда отменяет запланированное сообщение."""
 #     if not request.user.is_authorized:
 #         response = f'[SERVER] You are not authorized. Please, use "login" command.'
@@ -152,21 +122,21 @@ def help(request: Request) -> Response:
 #         task.cancel()
 #         response = f'[SERVER] Scheduled message has been cancelled.'
 #     await request.user.send(response)
-#
-#
-# @RequestHandler.register('list')
-# async def list(request: Request) -> None:
-#     """list - команда возвращает список всех сообщений, которые были отправлены в общем чате."""
-#     messages = self._mailbox.last()
-#     if messages:
-#         response = '\n'.join([str(message) for message in messages])
-#     else:
-#         response = '[SERVER] Message history is empty.'
-#     await request.user.send(response)
-#
-#
+
+
+@Handler.register('history')
+def history(request: Request) -> Update:
+    """history - команда возвращает список всех сообщений, которые были отправлены в общем чате."""
+    messages = Message.objects.all()[::-1]
+    if messages:
+        message = {'message': [msg.to_dict() for msg in messages]}
+    else:
+        message = 'Message history is empty.'
+    return Update('OK', data=message, target=request.client)
+
+
 # @RequestHandler.register('report')
-# async def report(request: Request) -> None:
+# def report(request: Request) -> None:
 #     """report {username} - пожаловаться на пользователя."""
 #     if not request.user.is_authorized:
 #         response = f'[SERVER] You are not authorized. Please, use "login" command.'
@@ -192,12 +162,3 @@ def help(request: Request) -> Response:
 #     await asyncio.gather(looking_user.send(response_to_reported_user),
 #                          request.user.send(response_to_reporter))
 #
-#
-
-#
-#
-# @RequestHandler.register('unknown')
-# async def unknown(request: Request) -> None:
-#     """В случае, если команда не была распознана, сервер возвращает сообщение об ошибке."""
-#     response = f'[SERVER] Error "{request.command}" is unknown command.'
-#     await request.user.send(response)

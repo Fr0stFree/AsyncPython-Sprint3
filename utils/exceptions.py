@@ -4,3 +4,7 @@ class ObjectDoesNotExist(Exception):
 
 class ObjectAlreadyExist(Exception):
     pass
+
+
+class ValidationError(Exception):
+    pass

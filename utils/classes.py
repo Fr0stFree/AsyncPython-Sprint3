@@ -1,7 +1,15 @@
 from .exceptions import ObjectAlreadyExist, ObjectDoesNotExist
 
+class Singleton(object):
+    _instance = None
+    def __new__(cls, *args, **kwargs):
+        if not isinstance(cls._instance, cls):
+            cls._instance = object.__new__(cls, *args, **kwargs)
+        return cls._instance
 
-
+    @classmethod
+    def get_instance(cls):
+        return cls._instance
 
 
 class Manager:
@@ -42,11 +50,11 @@ class Manager:
 
 
 class Model:
-    
-    def __new__(cls, *args, **kwargs):
-        if not hasattr(cls, 'objects'):
-            cls._objects = Manager(cls)
-        return super().__new__(cls)
+    objects: Manager = None
+
+    def __init_subclass__(cls, **kwargs):
+        cls.objects = Manager(cls)
+        return super().__init_subclass__(**kwargs)
     
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
@@ -54,10 +62,6 @@ class Model:
     
     def __repr__(self):
         return f'{self.__class__.__name__}({self.__dict__})'
-    
-    @property
-    def objects(self):
-        return self._objects
     
     def remove(self) -> None:
         self.objects.remove(**self.__dict__)
