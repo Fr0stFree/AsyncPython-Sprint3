@@ -17,12 +17,14 @@ class Client:
         self._server_host = server_host
         self._server_port = server_port
         self._transport: DataTransport | None = None
+        self._request_queue: asyncio.Queue[Request] = asyncio.Queue()
     
     async def __aenter__(self) -> 'Client':
         reader, writer = await asyncio.open_connection(self._server_host, self._server_port)
         self._transport = DataTransport(writer, reader)
         logger.debug("Connected to %s:%s", self._server_host, self._server_port)
         asyncio.ensure_future(self._receive_data())
+        asyncio.ensure_future(self._send_data())
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -38,17 +40,31 @@ class Client:
             except ConnectionError:
                 break
     
-    async def execute(self, statement: str) -> None:
-        command, *value = statement.split()
-        request = Request(command, data=' '.join(value)).to_json()
-        await self._transport.transfer(request)
+    async def _send_data(self) -> None:
+        while True:
+            try:
+                request = await self._request_queue.get()
+                await self._transport.transfer(request.to_json())
+                self._request_queue.task_done()
+            except ConnectionError:
+                break
 
+    async def handle_user_input(self) -> None:
+        statement = await ainput()
+        match statement.split():
+            case [command, *value]:
+                request = Request(command, data=' '.join(value))
+                await self._request_queue.put(request)
+                if command == 'exit':
+                    raise ConnectionError
+            case _:
+                print(f'\033[1;31;40m[ERROR] Unknown command: {statement}\033[0m')
+    
 
 async def init_client():
     async with Client() as client:
         while True:
-            statement = await ainput()
-            if statement == 'exit':
-                await client.execute(statement)
+            try:
+                await client.handle_user_input()
+            except ConnectionError:
                 break
-            asyncio.create_task(client.execute(statement))
