@@ -160,12 +160,17 @@ async def test_client_able_report_other_client(server, clients):
 async def test_client_able_to_be_banned_after_report(server, clients, monkeypatch):
     async with clients[0] as client1, clients[1] as client2, clients[2] as client3:
         bad_user = Gateway.objects.last()
-
         await client1.send(f'report {bad_user.username}')
         await client2.send(f'report {bad_user.username}')
         await asyncio.sleep(0.3)
 
         assert bad_user.is_banned
+        assert len(bad_user.reported_by) == 2
+        assert Message.objects.count() == 0
+
+        await client3.send(f'send hello')
+        await asyncio.sleep(0.3)
+        assert Message.objects.count() == 0
 
 
 @pytest.mark.asyncio

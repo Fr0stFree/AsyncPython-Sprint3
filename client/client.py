@@ -4,30 +4,33 @@ import logging.config
 from aioconsole import ainput
 
 from server.core.network import DataTransport, Request, Update
-from utils.settings import LOGGER
+from settings import Settings
 from utils.functions import print_update
 
 
-logging.config.dictConfig(LOGGER)
+settings = Settings()
+logging.config.dictConfig(settings.LOGGING)
 logger = logging.getLogger(__name__)
 
 
 class Client:
-    def __init__(self, server_host: str = "127.0.0.1", server_port: int = 8000):
+    def __init__(self, server_host: str, server_port: int) -> None:
         self._server_host = server_host
         self._server_port = server_port
         self._transport: DataTransport | None = None
-        self._request_queue: asyncio.Queue[Request] = asyncio.Queue()
-    
+        self._request_queue: asyncio.Queue = asyncio.Queue()
+        self._receiver: asyncio.Task | None = None
+
     async def __aenter__(self) -> 'Client':
         reader, writer = await asyncio.open_connection(self._server_host, self._server_port)
         self._transport = DataTransport(writer, reader)
         logger.debug("Connected to %s:%s", self._server_host, self._server_port)
-        asyncio.ensure_future(self._receive_data())
-        asyncio.ensure_future(self._send_data())
+        self._receiver = asyncio.ensure_future(self._receive_data())
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self._request_queue.join()
+        self._receiver.cancel()
         await self._transport.close()
         logger.info("Connection to %s:%s is closed", self._server_host, self._server_port)
     
@@ -39,32 +42,19 @@ class Client:
                 print_update(update)
             except ConnectionError:
                 break
-    
-    async def _send_data(self) -> None:
-        while True:
-            try:
-                request = await self._request_queue.get()
-                await self._transport.transfer(request.to_json())
-                self._request_queue.task_done()
-            except ConnectionError:
-                break
 
-    async def handle_user_input(self) -> None:
-        statement = await ainput()
-        match statement.split():
-            case [command, *value]:
-                request = Request(command, data=' '.join(value))
-                await self._request_queue.put(request)
-                if command == 'exit':
-                    raise ConnectionError
-            case _:
-                print(f'\033[1;31;40m[ERROR] Unknown command: {statement}\033[0m')
-    
+    async def send(self, statement: str) -> None:
+        command, *value = statement.split()
+        request = Request(command, ' '.join(value))
+        await self._transport.transfer(request.to_json())
 
-async def init_client():
-    async with Client() as client:
+    async def handle_input(self) -> None:
         while True:
-            try:
-                await client.handle_user_input()
-            except ConnectionError:
-                break
+            statement = await ainput()
+            match statement.split():
+                case [command, *value]:
+                    await self.send(statement)
+                    if command == 'exit':
+                        break
+                case _:
+                    continue

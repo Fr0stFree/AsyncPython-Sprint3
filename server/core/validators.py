@@ -16,4 +16,3 @@ def validate_message_delay(delay: str):
         raise ValidationError('Задержка должна быть целым числом')
     if int(delay) < 0:
         raise ValidationError('Задержка должна быть положительным числом')
-

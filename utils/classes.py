@@ -1,17 +1,5 @@
 from .exceptions import ObjectDoesNotExist
 
-class Singleton(object):
-    _instance = None
-
-    def __new__(cls, *args, **kwargs):
-        if not isinstance(cls._instance, cls):
-            cls._instance = object.__new__(cls, *args, **kwargs)
-        return cls._instance
-
-    @classmethod
-    def get_instance(cls):
-        return cls._instance
-
 
 class Manager:
     def __init__(self, model):
@@ -48,6 +36,15 @@ class Manager:
                 if getattr(obj, key) == value:
                     result.append(obj)
         return result
+
+    def count(self) -> int:
+        return len(self._objects)
+
+    def first(self):
+        return self._objects[0]
+
+    def last(self):
+        return self._objects[-1]
 
 
 class Model:

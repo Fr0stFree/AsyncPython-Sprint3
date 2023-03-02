@@ -2,11 +2,15 @@ import asyncio
 
 import getopt
 
+from settings import Settings
 from utils.functions import parse_opts, execute_later
-from .models import Gateway, Message, BAN_TIME, REPORTS_TO_BAN
+from .models import Gateway, Message
 from .network import Request, Update
 from .validators import validate_username, validate_message_delay
 from utils.exceptions import ValidationError, ObjectDoesNotExist
+
+
+settings = Settings()
 
 
 class Handler:
@@ -147,13 +151,13 @@ def report(request: Request) -> Update:
                       target=request.client)
     reporters = intruder.reported_by
     reporters.add(request.client)
-    if len(reporters) >= REPORTS_TO_BAN:
+    if len(reporters) >= settings.REPORTS_TO_BAN:
         intruder.ban()
-        ban_notification = Update('ERROR', data=f'You have been banned for {BAN_TIME} seconds.',
+        ban_notification = Update('ERROR', data=f'You have been banned for {settings.BAN_TIME} seconds.',
                                   target=intruder)
         asyncio.create_task(Gateway.send_update(ban_notification))
         
-        unban_task = asyncio.create_task(execute_later(func=intruder.unban, delay=BAN_TIME))
+        unban_task = asyncio.create_task(execute_later(func=intruder.unban, delay=settings.BAN_TIME))
         unban_notification = Update('OK', data=f'You able to send messages again.', target=intruder)
         unban_task.add_done_callback(
             lambda task: asyncio.create_task(Gateway.send_update(unban_notification))

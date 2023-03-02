@@ -1,14 +1,12 @@
 import asyncio
-from typing import Final
 
+from settings import Settings
 from utils.functions import execute_later
 from utils.classes import Model
 from server.core.network import DataTransport, Request, Update
 
 
-MESSAGE_TTL: Final[int] = 60 * 60 # seconds
-BAN_TIME: Final[int] = 60 * 10  # seconds
-REPORTS_TO_BAN: Final[int] = 3
+settings = Settings()
 
 
 class Gateway(Model):
@@ -82,16 +80,15 @@ class Message(Model):
         if delay is None:
             self.task = asyncio.create_task(Gateway.send_update(update))
         else:
-            self.task = asyncio.create_task(execute_later(func=Gateway.send_update,
-                                                          update=update,
-                                                          delay=delay))
+            self.task = asyncio.create_task(execute_later(func=Gateway.send_update, update=update, delay=delay))
         self.task.add_done_callback(self._destroy_self)
 
     def cancel(self) -> None:
         if self.status != 'PENDING':
             raise RuntimeError('Message is already sent')
         self.task.remove_done_callback(self._destroy_self)
+        self.task.cancel()
         self.remove()
 
     def _destroy_self(self, task: asyncio.Task) -> None:
-        asyncio.create_task(execute_later(self.remove, delay=MESSAGE_TTL))
+        asyncio.create_task(execute_later(self.remove, delay=settings.MESSAGE_TTL))
