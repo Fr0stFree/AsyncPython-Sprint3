@@ -1,61 +1,74 @@
 import asyncio
-from typing import Callable, Awaitable
+import datetime as dt
 
-from server.src.models.request import Request
 from server.src.models.client import ClientManager
-from server.src.models.messages import ServerMessage
-from shared.requests import Actions, MessageTypes, SendMessageRequestData
+from server.src.models.request import Request
+from server.src.router import Router
+from shared.schemas.actions import BroadcastMessagePayload, SendMessagePayload, ActionTypes
+from shared.schemas.notifications import BroadcastMessageNotificationPayload, \
+    BroadcastMessageNotificationFrame, ErrorNotificationFrame, ErrorNotificationPayload
 
 
-class ActionHandler:
-    def __init__(self, client_manager: ClientManager) -> None:
-        self._clients = client_manager
-        self._handlers: dict[Actions, Callable[[Request], Awaitable[None]]] = {
-            Actions.SEND_MESSAGE: self._on_send_message,
-            Actions.LOGOUT: self._on_logout,
-            Actions.UNKNOWN: self._on_unknown_action,
-        }
+router = Router()
 
-    async def handle(self, request: Request) -> None:
-        handler = self._handlers.get(request.action) or self._handlers[Actions.UNKNOWN]
-        try:
-            request.logger.info("Handling with '%s'", handler.__name__)
-            await handler(request)
-        except Exception as error:
-            message = ServerMessage(to=request.client.user.username, ok=False, text="Something went wrong.")
-            request.logger.exception("Error occurred while handling request")
-            await request.reply(message)
-            raise error
 
-    async def _on_send_message(self, request: Request) -> None:
-        data = SendMessageRequestData.model_validate(request.data)
+@router.on_action(ActionTypes.BROADCAST_MESSAGE)
+async def on_broadcast_message(request: Request) -> None:
+    incoming_payload = BroadcastMessagePayload.model_validate(request.frame.payload)
+    outgoing_payload = BroadcastMessageNotificationPayload(
+        text=incoming_payload.text,
+        sender=request.client.user.id,
+        created_at=dt.datetime.now(dt.UTC),
+    )
+    frame = BroadcastMessageNotificationFrame(payload=outgoing_payload)
+    clients = ClientManager.get_current()
+    tasks = [client.send(frame) for client in clients.all()]
+    await asyncio.gather(*tasks)
+    request.logger.info("Message broadcasted successfully")
 
-        match data.type:
-            case MessageTypes.PRIVATE:
-                client = self._clients.get(data.to)
-                if client is None:
-                    request.logger.info("User '%s' not found", data.to)
-                    message = ServerMessage(
-                        to=request.client.user.username, text=f"User '{data.to}' not found", ok=False
-                    )
-                    return await request.reply(message)
 
-                message = ServerMessage(to=data.to, text=data.text, sender=request.client.user.username)
-                await client.send(message)
-                request.logger.info("Message sent to '%s'", data.to)
-                return
+@router.on_action(ActionTypes.SEND_MESSAGE)
+async def on_send_message(request: Request) -> None:
+    incoming_payload = SendMessagePayload.model_validate(request.frame.payload)
+    clients = ClientManager.get_current()
+    client = clients.get(incoming_payload.to)
+    if client is None:
+        outgoing_payload = ErrorNotificationPayload(
+            text=f"User '{incoming_payload.to}' not found",
+            created_at=dt.datetime.now(dt.UTC),
+        )
+        await request.reply(ErrorNotificationFrame(payload=outgoing_payload))
+        request.logger.info("User '%s' not found", incoming_payload.to)
+    else:
+        outgoing_payload = BroadcastMessageNotificationPayload(
+            text=incoming_payload.text,
+            sender=request.client.user.id,
+            created_at=dt.datetime.now(dt.UTC),
+        )
+        frame = BroadcastMessageNotificationFrame(payload=outgoing_payload)
+        await client.send(frame)
+        request.logger.info("Message sent to '%s'", incoming_payload.to)
 
-            case MessageTypes.BROADCAST:
-                message = ServerMessage(to=MessageTypes.BROADCAST, text=data.text, sender=request.client.user.username)
-                tasks = [client.send(message) for client in self._clients.all()]
-                await asyncio.gather(*tasks)
-                request.logger.info("Message broadcasted successfully")
-                return
 
-    async def _on_logout(self, request: Request) -> None:
-        await self._clients.drop(request.client)
-        request.logger.info("Client '%s' dropped", request.client.user.username)
+async def on_error(request: Request, error: Exception) -> None:
+    payload = ErrorNotificationPayload(
+        text=f"Something went wrong: {error}",
+        created_at=dt.datetime.now(dt.UTC),
+    )
+    frame = ErrorNotificationFrame(payload=payload)
+    request.logger.exception("Error occurred while handling request")
+    await request.reply(frame)
 
-    async def _on_unknown_action(self, request: Request) -> None:
-        message = ServerMessage(to=request.client.user.username, text='Unknown command', ok=False)
-        await request.reply(message)
+
+@router.on_action(ActionTypes.LOGOUT)
+async def on_logout(request: Request) -> None:
+    clients = ClientManager.get_current()
+    await clients.drop(request.client)
+    request.logger.info("Client '%s' dropped", request.client.user.id)
+
+
+async def on_unknown_action(request: Request) -> None:
+    payload = ErrorNotificationPayload(text="Unknown command", created_at=dt.datetime.now(dt.UTC))
+    frame = ErrorNotificationFrame(payload=payload)
+    await request.reply(frame)
+    request.logger.info("Unknown command received from '%s'", request.client.user.id)

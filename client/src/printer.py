@@ -1,6 +1,7 @@
 from enum import StrEnum
 
-from shared.messages import Message
+from shared.schemas.notifications import NotificationFrame, NotificationTypes, PrivateMessageNotificationPayload, \
+    BroadcastMessageNotificationPayload
 
 
 class Colors(StrEnum):
@@ -12,12 +13,17 @@ class Colors(StrEnum):
 
 
 class Printer:
-    def __init__(self) -> None:
-        pass
+    def message(self, frame: NotificationFrame) -> None:
+        match NotificationTypes(frame.type):
+            case NotificationTypes.PRIVATE_MESSAGE:
+                payload = PrivateMessageNotificationPayload.model_validate(frame.payload)
+                text = f'{payload.sender} >>> {payload.text}'
+                print(self._with_color(text, Colors.BLUE))
 
-    def message(self, message: Message) -> None:
-        color = Colors.BLUE if message.ok else Colors.RED
-        print(self._with_color(f'{message.sender}: {message.text}', color))
+            case NotificationTypes.BROADCAST_MESSAGE:
+                payload = BroadcastMessageNotificationPayload.model_validate(frame.payload)
+                text = f'{payload.sender} >>> {payload.text}'
+                print(self._with_color(text, Colors.GREEN))
 
     def info(self, text: str) -> None:
         print(self._with_color(text, Colors.YELLOW))

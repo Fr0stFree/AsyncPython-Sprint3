@@ -6,8 +6,9 @@ from aioconsole import ainput
 
 from client.src.printer import Printer
 from client.src.settings import ClientSettings
-from shared.messages import Message
-from shared.requests import Actions, RequestData, SendMessageRequestData, MessageTypes
+from shared.schemas import actions
+from shared.schemas.actions import ActionTypes, ActionFrame
+from shared.schemas.notifications import NotificationFrame
 from shared.transport import DataTransport
 
 
@@ -16,7 +17,6 @@ class Client:
         self._settings = settings
         self._printer = Printer()
         self._transport: DataTransport | None = None
-        self._request_queue: asyncio.Queue = asyncio.Queue()
         self._receiver: asyncio.Task | None = None
 
     async def __aenter__(self) -> Self:
@@ -33,7 +33,6 @@ class Client:
 
     async def __aexit__(self, exc_type: Type[BaseException], exc: BaseException, tb: TracebackType) -> None:
         self._printer.info("Disconnecting from the server...")
-        await self._request_queue.join()
         self._receiver.cancel()
         await self._transport.close()
         self._printer.success("Successfully disconnected")
@@ -41,27 +40,27 @@ class Client:
     async def _receive_data(self) -> None:
         while True:
             data = await self._transport.receive()
-            message = Message.model_validate_json(data)
-            self._printer.message(message)
+            frame = NotificationFrame.model_validate_json(data)
+            self._printer.message(frame)
 
-    async def send(self, data: RequestData) -> None:
-        await self._transport.transfer(data.model_dump_json())
+    async def send(self, frame: ActionFrame) -> None:
+        await self._transport.transfer(frame.model_dump_json())
 
     async def handle_input(self) -> None:
         while True:
             statement = await ainput()
             match statement.split():
-                case [Actions.SEND_MESSAGE.value, *text]:
-                    data = SendMessageRequestData(
-                        text=" ".join(text), type=MessageTypes.BROADCAST, to=MessageTypes.BROADCAST
-                    )
-                    await self.send(data)
-
-                case [Actions.HELP.value]:
-                    await self.send(RequestData(action=Actions.HELP))
-
-                case [Actions.LOGOUT.value]:
-                    await self.send(RequestData(action=Actions.LOGOUT))
+                case ["send", *text]:
+                    payload = actions.BroadcastMessagePayload(text=" ".join(text))
+                    frame = actions.BroadcastMessageActionFrame(payload=payload)
+                    await self.send(frame)
+                case ["help"]:
+                    frame = ActionFrame(type=ActionTypes.HELP)
+                    await self.send(frame)
+                case ["exit" | "quit" | "logout"]:
+                    frame = ActionFrame(type=ActionTypes.LOGOUT)
+                    await self.send(frame)
                     break
                 case _:
-                    self._printer.error(f"Unknown command: '{statement}'. Use 'help' to see available commands.")
+                    text = f"Unknown command: '{statement}'. Use 'help' to see available commands."
+                    self._printer.error(text)

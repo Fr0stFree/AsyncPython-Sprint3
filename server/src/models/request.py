@@ -1,24 +1,23 @@
 import logging
 from logging import Logger
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING
 
-from shared.requests import Actions
-from shared.messages import Message
+from shared.schemas.actions import ActionFrame
+from shared.schemas.notifications import NotificationFrame
+
 if TYPE_CHECKING:
     from server.src.models.client import Client
-
 
 type LoggerLike = Logger | logging.LoggerAdapter
 
 
 class Request:
-    __slots__ = ("_client", "_logger", "_data", "_action")
+    __slots__ = ("_client", "_logger", "_frame")
 
-    def __init__(self, client: 'Client', logger: LoggerLike, action: Actions, data: dict) -> None:
+    def __init__(self, client: 'Client', logger: LoggerLike, frame: ActionFrame) -> None:
         self._client = client
         self._logger = logger
-        self._action = action
-        self._data = data
+        self._frame = frame
 
     @property
     def client(self) -> 'Client':
@@ -29,15 +28,11 @@ class Request:
         return self._logger
 
     @property
-    def action(self) -> Actions:
-        return self._action
+    def frame(self) -> ActionFrame:
+        return self._frame
 
-    @property
-    def data(self) -> Mapping:
-        return self._data
-
-    async def reply(self, message: Message) -> None:
+    async def reply(self, message: NotificationFrame) -> None:
         await self._client.send(message)
 
     def __str__(self) -> str:
-        return f'Request(client={self._client.user.username}, action={self._action.value}, data={self._data})'
+        return f'Request(client={self._client.user.id}, action={self._frame.type.value})'

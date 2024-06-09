@@ -11,9 +11,8 @@ class ServerSettings(BaseSettings):
         'version': 1,
         'disable_existing_loggers': False,
         'formatters': {
-            # also add extra request id
             'simple': {
-                'format': '[{levelname}] {request_id} >>> {message} ',
+                'format': '[{levelname}] >>> {message} ',
                 'style': '{',
             },
         },
