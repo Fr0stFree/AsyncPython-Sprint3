@@ -3,17 +3,12 @@ import datetime as dt
 
 from server.src.models.client import ClientManager
 from server.src.models.request import Request
-from server.src.router import Router
-from shared.schemas.actions import BroadcastMessagePayload, SendMessagePayload, ActionTypes
+from shared.schemas.actions import BroadcastMessagePayload, SendMessagePayload
 from shared.schemas.notifications import BroadcastMessageNotificationPayload, \
     BroadcastMessageNotificationFrame, ErrorNotificationFrame, ErrorNotificationPayload
 
 
-router = Router()
-
-
-@router.on_action(ActionTypes.BROADCAST_MESSAGE)
-async def on_broadcast_message(request: Request) -> None:
+async def broadcast_message_handler(request: Request) -> None:
     incoming_payload = BroadcastMessagePayload.model_validate(request.frame.payload)
     outgoing_payload = BroadcastMessageNotificationPayload(
         text=incoming_payload.text,
@@ -27,8 +22,7 @@ async def on_broadcast_message(request: Request) -> None:
     request.logger.info("Message broadcasted successfully")
 
 
-@router.on_action(ActionTypes.SEND_MESSAGE)
-async def on_send_message(request: Request) -> None:
+async def send_message_handler(request: Request) -> None:
     incoming_payload = SendMessagePayload.model_validate(request.frame.payload)
     clients = ClientManager.get_current()
     client = clients.get(incoming_payload.to)
@@ -50,7 +44,7 @@ async def on_send_message(request: Request) -> None:
         request.logger.info("Message sent to '%s'", incoming_payload.to)
 
 
-async def on_error(request: Request, error: Exception) -> None:
+async def error_handler(request: Request, error: Exception) -> None:
     payload = ErrorNotificationPayload(
         text=f"Something went wrong: {error}",
         created_at=dt.datetime.now(dt.UTC),
@@ -60,15 +54,14 @@ async def on_error(request: Request, error: Exception) -> None:
     await request.reply(frame)
 
 
-@router.on_action(ActionTypes.LOGOUT)
-async def on_logout(request: Request) -> None:
+async def logout_handler(request: Request) -> None:
     clients = ClientManager.get_current()
     await clients.drop(request.client)
     request.logger.info("Client '%s' dropped", request.client.user.id)
 
 
-async def on_unknown_action(request: Request) -> None:
-    payload = ErrorNotificationPayload(text="Unknown command", created_at=dt.datetime.now(dt.UTC))
+async def unknown_action_handler(request: Request) -> None:
+    payload = ErrorNotificationPayload(text=f"Unknown command", created_at=dt.datetime.now(dt.UTC))
     frame = ErrorNotificationFrame(payload=payload)
     await request.reply(frame)
     request.logger.info("Unknown command received from '%s'", request.client.user.id)

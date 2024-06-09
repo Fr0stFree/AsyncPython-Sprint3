@@ -1,4 +1,4 @@
-from typing import Callable, Awaitable, Type
+from typing import Callable, Awaitable, Self
 
 from server.src.models.request import Request
 from shared.schemas.actions import ActionTypes
@@ -12,8 +12,9 @@ class Router:
 
     async def handle(self, request: Request) -> None:
         handler = self._handlers.get(request.frame.type)
-        if handler is None:
-            await self._unknown_handler(request)  # possible None
+        if handler is None and self._unknown_handler is not None:
+            await self._unknown_handler(request)
+            return
 
         try:
             request.logger.info("Handling with '%s'", handler.__name__)
@@ -22,8 +23,14 @@ class Router:
             request.logger.exception("Error occurred while handling request")
             await self._error_handler(request, error)
 
-    def on_action[T](self, action_type: ActionTypes) -> Callable[[T], T]:
-        def decorator(handler: T) -> T:
-            self._handlers[action_type] = handler
-            return handler
-        return decorator
+    def register_action_handler(self, action_type: ActionTypes, handler: Callable[[Request], Awaitable[None]]) -> Self:
+        self._handlers[action_type] = handler
+        return self
+
+    def register_unknown_handler(self, handler: Callable[[Request], Awaitable[None]]) -> Self:
+        self._unknown_handler = handler
+        return self
+
+    def register_error_handler(self, handler: Callable[[Request, Exception], Awaitable[None]]) -> Self:
+        self._error_handler = handler
+        return self

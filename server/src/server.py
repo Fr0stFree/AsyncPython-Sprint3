@@ -2,11 +2,13 @@ import asyncio
 import logging.config
 import uuid
 
-from server.src.handlers import router
+from server.src.handlers import error_handler, send_message_handler, broadcast_message_handler, \
+    unknown_action_handler
 from server.src.models.client import ClientManager
 from server.src.models.request import Request
+from server.src.router import Router
 from server.src.settings import ServerSettings
-from shared.schemas.actions import ActionFrame
+from shared.schemas.actions import ActionFrame, ActionTypes
 
 
 class Server:
@@ -20,6 +22,8 @@ class Server:
         self._settings = settings
         self._server_logger = logging.getLogger("server")
         self._clients = ClientManager()
+        self._router = Router()
+        self._setup_routes(self._router)
 
     async def start(self) -> None:
         self._server_logger.info("Starting server on %s:%s...", self._settings.host, self._settings.port)
@@ -54,5 +58,11 @@ class Server:
                 frame=ActionFrame.model_validate_json(raw),
             )
             request.logger.debug("Received request '%s'", request)
-            await router.handle(request)
+            await self._router.handle(request)
             request.logger.debug("Request '%s' has been handled", request)
+
+    def _setup_routes(self, router: Router) -> None:
+        router.register_action_handler(ActionTypes.BROADCAST_MESSAGE, broadcast_message_handler) \
+            .register_action_handler(ActionTypes.SEND_MESSAGE, send_message_handler) \
+            .register_unknown_handler(unknown_action_handler) \
+            .register_error_handler(error_handler)
