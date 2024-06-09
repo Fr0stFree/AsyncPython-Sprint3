@@ -3,7 +3,7 @@ import logging.config
 import uuid
 
 from server.src.handlers import error_handler, send_message_handler, broadcast_message_handler, \
-    unknown_action_handler
+    unknown_action_handler, logout_handler
 from server.src.models.client import ClientManager
 from server.src.models.request import Request
 from server.src.router import Router
@@ -64,5 +64,7 @@ class Server:
     def _setup_routes(self, router: Router) -> None:
         router.register_action_handler(ActionTypes.BROADCAST_MESSAGE, broadcast_message_handler) \
             .register_action_handler(ActionTypes.SEND_MESSAGE, send_message_handler) \
+            .register_action_handler(ActionTypes.LOGOUT, logout_handler) \
+            .register_action_handler(ActionTypes.HELP, unknown_action_handler) \
             .register_unknown_handler(unknown_action_handler) \
             .register_error_handler(error_handler)
