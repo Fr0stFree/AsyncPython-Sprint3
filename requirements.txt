@@ -1,3 +1,0 @@
-aioconsole==0.6.0
-pydantic==1.10.5
-python-dotenv==1.0.0
