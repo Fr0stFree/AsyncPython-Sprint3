@@ -54,7 +54,7 @@ class ClientManager:
     @classmethod
     def get_current(cls) -> Self:
         if cls._instance is None:
-            raise RuntimeError("ClientManager is not initialized")
+            return cls()
         return cls._instance
 
     def create(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> Client:
