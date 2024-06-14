@@ -28,7 +28,7 @@ class SendMessageHandler(BaseHandler):
         frame = ErrorNotificationFrame(payload=payload)
         await self.client.send(frame)
 
-    async def _send_message(self, client: Client) -> None:
+    async def _send_message(self, receiver: Client) -> None:
         self.logger.info(f"Sending message to '{self.payload.to}'...")
         payload = BroadcastMessageNotificationPayload(
             text=self.payload.text,
@@ -36,4 +36,4 @@ class SendMessageHandler(BaseHandler):
             created_at=dt.datetime.now(dt.UTC),
         )
         frame = BroadcastMessageNotificationFrame(payload=payload)
-        await client.send(frame)
+        await receiver.send(frame)
