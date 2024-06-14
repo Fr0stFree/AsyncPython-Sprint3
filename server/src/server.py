@@ -1,18 +1,13 @@
 import asyncio
 import logging.config
 import uuid
-from typing import Callable, Self, Type, Awaitable
+from typing import Callable, Self, Type
 
+from server.src.handlers.base_error_handler import BaseErrorHandler
 from server.src.handlers.base_handler import BaseHandler
-from server.src.handlers.error_handler import BaseErrorHandler
-from server.src.models.client import ClientManager, Client
-from server.src.models.request import Request
+from server.src.models import ClientManager, Client
 from server.src.settings import ServerSettings
 from shared.schemas.actions import ActionFrame, ActionTypes
-
-
-type THandler = Callable[[Request], Awaitable[None]]
-type TExcHandler = Callable[[Request, Exception], Awaitable[None]]
 
 
 class Server:
@@ -61,12 +56,18 @@ class Server:
         client = self._clients.create(reader, writer)
         self._server_logger.info("New connection from %s", client)
         while True:
-            await self._on_incoming_request(client)
+            try:
+                data = await client.listen()
+            except ConnectionError:
+                self._server_logger.error("Connection closed by %s", client)
+                await self._clients.drop(client)
+                break
 
-    async def _on_incoming_request(self, client: Client) -> None:
-        raw = await client.listen()
+            await self._handle_client_request(data, client)
+
+    async def _handle_client_request(self, data: str, client: Client) -> None:
         logger = logging.LoggerAdapter(self._server_logger, extra={"request_id": str(uuid.uuid4())})
-        frame = ActionFrame.model_validate_json(raw)
+        frame = ActionFrame.model_validate_json(data)
 
         Handler = self._handlers.get(frame.type, self._unknown_handler)
         handler = Handler(frame.payload, client, logger)

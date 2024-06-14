@@ -13,6 +13,7 @@ type LoggerLike = Logger | logging.LoggerAdapter
 
 
 class Client:
+
     def __init__(
         self,
         reader: asyncio.StreamReader,
